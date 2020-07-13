@@ -1,0 +1,376 @@
+---
+title: "MBD-seq analysis: effect of acetate and fibre on heart and spleen DNA methylation"
+author: "Mark Ziemann"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+theme: cosmo
+---
+
+
+## Introduction
+
+In this report, I will take you through an analysis of the MBD-seq that was previosly generated.
+I will perform an analysis that begins with DESeq2 for differential methylation followed by pathway enrichment analysis with mitch.
+
+```{r,packages}
+suppressPackageStartupMessages({
+    # to be run in R4
+    library("tidyverse")
+    library("reshape2")
+    library("DESeq2")
+    library("gplots")
+    library("fgsea")
+    library("mitch")
+})
+```
+
+## Import profiling data 
+
+This analysis uses the 3kbp area arount the TSS.
+
+```{r,import}
+hm <- read.table("heart_meth_3kbpTSS.txt",header=TRUE,row.names=1)
+sm <-read.table("spleen_meth_3kbpTSS.txt",header=TRUE,row.names=1)
+b <- data.frame(sm,hm)
+```
+
+# MDS plots
+```{r,mds}
+plot(cmdscale(dist(t(b))), bty='l', xlab="Coordinate 1", ylab="Coordinate 2", 
+ type = "p", pch=19, cex.axis=1.3, cex.lab=1.3 , col="gray") 
+text(cmdscale(dist(t(b))), labels=colnames(b),cex=1.3) 
+mtext("spleen and heart samples")
+
+plot(cmdscale(dist(t(hm))), bty='l', xlab="Coordinate 1", ylab="Coordinate 2",
+ type = "p", pch=19, cex.axis=1.3, cex.lab=1.3 , col="gray")
+text(cmdscale(dist(t(hm))), labels=colnames(hm),cex=1.3)
+mtext("heart samples")
+
+plot(cmdscale(dist(t(sm))), bty='l', xlab="Coordinate 1", ylab="Coordinate 2",
+ type = "p", pch=19, cex.axis=1.3, cex.lab=1.3 , col="gray")
+text(cmdscale(dist(t(sm))), labels=colnames(sm),cex=1.3)
+mtext("spleen samples")
+```
+
+# Curate the samplesheet
+```{r,samplesheet}
+ss_sm <- as.data.frame(colnames(sm))
+colnames(ss_sm) <- "samplename"
+ss_sm$group  <- sapply(strsplit(as.character(ss_sm$samplename) , "_"),"[[",2)
+ss_sm$group <- gsub("[0-9]+","",ss_sm$group)
+rownames(ss_sm) <- ss_sm$samplename
+ss_sm$samplename=NULL
+
+ss_hm <- as.data.frame(colnames(hm))
+colnames(ss_hm) <- "samplename"
+ss_hm$group  <- sapply(strsplit(as.character(ss_hm$samplename) , "_"),"[[",2)
+ss_hm$group <- gsub("[0-9]+","",ss_hm$group)
+rownames(ss_hm) <- ss_hm$samplename
+ss_hm$samplename=NULL
+```
+
+# Differential analysis
+
+We will be running some comparisons between groups:
+
+1. HEART ctrl vs acetate
+
+2. HEART ctrl vs hifib
+
+3. SPLEEN ctrl vs acetate
+
+4. SPLEEN ctrl vs hifibre
+
+
+## HEART ctrl vs acetate
+
+```{r,dm1}
+x <- hm[,grep("hifi" , colnames(hm) ,invert=TRUE)]
+x<-x[which(rowSums(x)/ncol(x)>=(10)),]
+xs <- ss_hm[which( rownames(ss_hm) %in% colnames(x) ),1,drop=FALSE]
+xs$trt <- factor(as.numeric(grepl("acetate",xs$group)))
+dds <- DESeqDataSetFromMatrix(countData = x , colData = xs, design = ~ trt )
+res <- DESeq(dds)
+z<- results(res)
+vsd <- vst(dds, blind=FALSE)
+zz<-cbind(as.data.frame(z),assay(vsd))
+dge<-as.data.frame(zz[order(zz$pvalue),])
+write.table(dge,file="heart_ctrl_vs_acetate_deseq.tsv",quote=F,sep="\t")
+#some plots
+sig<-subset(dge,padj<0.05)
+SIG=nrow(sig)
+DN=nrow(subset(sig,log2FoldChange<0))
+UP=nrow(subset(sig,log2FoldChange>0))
+HEADER=paste("ctrl vs acetate:", SIG , "DGEs,", UP ,"up,", DN, "down")
+plot(log2(dge$baseMean),dge$log2FoldChange,cex=0.6,cex.axis=1.2,cex.lab=1.3, 
+ xlab="log2 base mean",
+ ,ylab="log2 fold change" ,pch=19,col="#838383")
+points(log2(sig$baseMean),sig$log2FoldChange,cex=0.6,pch=19,col="red")
+mtext((HEADER),cex=1.2)
+top<-head(sig,20)
+plot(dge$log2FoldChange, -log2(dge$pvalue)+1E-307 ,cex=0.6, cex.lab=1.3,cex.axis=1.2,
+ xlim=c(-3,3),xlab="log2 fold change", ylab="-log2 p-value" ,pch=19,col="#838383")
+points(sig$log2FoldChange, -log2(sig$pvalue)+1E-307, cex=0.6,pch=19,col="red")  
+mtext((HEADER),cex=1.2)
+# top N gene heatmap
+colfunc <- colorRampPalette(c("blue", "white", "red"))
+heatmap.2(  as.matrix(dge[1:50,c(7:ncol(dge))]), col=colfunc(25),scale="row",
+ trace="none",margins = c(6,20), cexRow=.6, cexCol=.8,  main="Top 50 genes")
+
+heart_ctrl_vs_acetate <- dge
+```
+
+## HEART ctrl vs hifib
+
+```{r,dm2}
+x <- hm[,grep("acet" , colnames(hm) ,invert=TRUE)]
+x<-x[which(rowSums(x)/ncol(x)>=(10)),]
+xs <- ss_hm[which( rownames(ss_hm) %in% colnames(x) ),1,drop=FALSE]
+xs$trt <- factor(as.numeric(grepl("hifi",xs$group)))
+dds <- DESeqDataSetFromMatrix(countData = x , colData = xs, design = ~ trt )
+res <- DESeq(dds)
+z<- results(res)
+vsd <- vst(dds, blind=FALSE)
+zz<-cbind(as.data.frame(z),assay(vsd))
+dge<-as.data.frame(zz[order(zz$pvalue),])
+write.table(dge,file="heart_ctrl_vs_hifibre_deseq.tsv",quote=F,sep="\t")
+#some plots
+sig<-subset(dge,padj<0.05)
+SIG=nrow(sig)
+DN=nrow(subset(sig,log2FoldChange<0))
+UP=nrow(subset(sig,log2FoldChange>0))
+HEADER=paste("ctrl vs hifibre:", SIG , "DGEs,", UP ,"up,", DN, "down")
+plot(log2(dge$baseMean),dge$log2FoldChange,cex=0.6,cex.axis=1.2,cex.lab=1.3,
+ xlab="log2 base mean",
+ ,ylab="log2 fold change" ,pch=19,col="#838383")
+points(log2(sig$baseMean),sig$log2FoldChange,cex=0.6,pch=19,col="red")
+mtext((HEADER),cex=1.2)
+top<-head(sig,20)
+plot(dge$log2FoldChange, -log2(dge$pvalue)+1E-307 ,cex=0.6, cex.lab=1.3,cex.axis=1.2,
+ xlim=c(-3,3),xlab="log2 fold change", ylab="-log2 p-value" ,pch=19,col="#838383")
+points(sig$log2FoldChange, -log2(sig$pvalue)+1E-307, cex=0.6,pch=19,col="red")
+mtext((HEADER),cex=1.2)
+# top N gene heatmap
+colfunc <- colorRampPalette(c("blue", "white", "red"))
+heatmap.2(  as.matrix(dge[1:50,c(7:ncol(dge))]), col=colfunc(25),scale="row",
+ trace="none",margins = c(6,20), cexRow=.6, cexCol=.8,  main="Top 50 genes")
+
+heart_ctrl_vs_hifibre <- dge
+```
+
+## SPLEEN ctrl vs acetate
+
+```{r,dm3}
+x <- sm[,grep("hifi" , colnames(sm) ,invert=TRUE)]
+x<-x[which(rowSums(x)/ncol(x)>=(10)),]
+xs <- ss_sm[which( rownames(ss_sm) %in% colnames(x) ),1,drop=FALSE]
+xs$trt <- factor(as.numeric(grepl("acetate",xs$group)))
+dds <- DESeqDataSetFromMatrix(countData = x , colData = xs, design = ~ trt )
+res <- DESeq(dds)
+z<- results(res)
+vsd <- vst(dds, blind=FALSE)
+zz<-cbind(as.data.frame(z),assay(vsd))
+dge<-as.data.frame(zz[order(zz$pvalue),])
+write.table(dge,file="spleen_ctrl_vs_acetate_deseq.tsv",quote=F,sep="\t")
+#some plots
+sig<-subset(dge,padj<0.05)
+SIG=nrow(sig)
+DN=nrow(subset(sig,log2FoldChange<0))
+UP=nrow(subset(sig,log2FoldChange>0))
+HEADER=paste("ctrl vs acetate:", SIG , "DGEs,", UP ,"up,", DN, "down")
+plot(log2(dge$baseMean),dge$log2FoldChange,cex=0.6,cex.axis=1.2,cex.lab=1.3,
+ xlab="log2 base mean",
+ ,ylab="log2 fold change" ,pch=19,col="#838383")
+points(log2(sig$baseMean),sig$log2FoldChange,cex=0.6,pch=19,col="red")
+mtext((HEADER),cex=1.2)
+top<-head(sig,20)
+plot(dge$log2FoldChange, -log2(dge$pvalue)+1E-307 ,cex=0.6, cex.lab=1.3,cex.axis=1.2,
+ xlim=c(-3,3),xlab="log2 fold change", ylab="-log2 p-value" ,pch=19,col="#838383")
+points(sig$log2FoldChange, -log2(sig$pvalue)+1E-307, cex=0.6,pch=19,col="red")
+mtext((HEADER),cex=1.2)
+# top N gene heatmap
+colfunc <- colorRampPalette(c("blue", "white", "red"))
+heatmap.2(  as.matrix(dge[1:50,c(7:ncol(dge))]), col=colfunc(25),scale="row",
+ trace="none",margins = c(6,20), cexRow=.6, cexCol=.8,  main="Top 50 genes")
+
+spleen_ctrl_vs_acetate <- dge
+
+```
+
+## SPLEEN ctrl vs hifibre
+
+```{r,dm4}
+x <- sm[,grep("acet" , colnames(sm) ,invert=TRUE)]
+x<-x[which(rowSums(x)/ncol(x)>=(10)),]
+xs <- ss_sm[which( rownames(ss_sm) %in% colnames(x) ),1,drop=FALSE]
+xs$trt <- factor(as.numeric(grepl("hifi",xs$group)))
+dds <- DESeqDataSetFromMatrix(countData = x , colData = xs, design = ~ trt )
+res <- DESeq(dds)
+z<- results(res)
+vsd <- vst(dds, blind=FALSE)
+zz<-cbind(as.data.frame(z),assay(vsd))
+dge<-as.data.frame(zz[order(zz$pvalue),])
+write.table(dge,file="spleen_ctrl_vs_hifibre_deseq.tsv",quote=F,sep="\t")
+#some plots
+sig<-subset(dge,padj<0.05)
+SIG=nrow(sig)
+DN=nrow(subset(sig,log2FoldChange<0))
+UP=nrow(subset(sig,log2FoldChange>0))
+HEADER=paste("ctrl vs hifibre:", SIG , "DGEs,", UP ,"up,", DN, "down")
+plot(log2(dge$baseMean),dge$log2FoldChange,cex=0.6,cex.axis=1.2,cex.lab=1.3,
+ xlab="log2 base mean",
+ ,ylab="log2 fold change" ,pch=19,col="#838383")
+points(log2(sig$baseMean),sig$log2FoldChange,cex=0.6,pch=19,col="red")
+mtext((HEADER),cex=1.2)
+top<-head(sig,20)
+plot(dge$log2FoldChange, -log2(dge$pvalue)+1E-307 ,cex=0.6, cex.lab=1.3,cex.axis=1.2,
+ xlim=c(-3,3),xlab="log2 fold change", ylab="-log2 p-value" ,pch=19,col="#838383")
+points(sig$log2FoldChange, -log2(sig$pvalue)+1E-307, cex=0.6,pch=19,col="red")
+mtext((HEADER),cex=1.2)
+# top N gene heatmap
+colfunc <- colorRampPalette(c("blue", "white", "red"))
+heatmap.2(  as.matrix(dge[1:50,c(7:ncol(dge))]), col=colfunc(25),scale="row",
+ trace="none",margins = c(6,20), cexRow=.6, cexCol=.8,  main="Top 50 genes")
+
+spleen_ctrl_vs_hifibre <- dge
+```
+
+# Pathway level analysis with mitch
+
+## First fetch gene sets from Reactome.
+
+```{r,genesets}
+library("mitch")
+# gene sets
+download.file("https://reactome.org/download/current/ReactomePathways.gmt.zip", 
+    destfile="ReactomePathways.gmt.zip")
+unzip("ReactomePathways.gmt.zip",overwrite = TRUE)
+genesets <- gmt_import("ReactomePathways.gmt")
+```
+
+Now I will run enrichment analysis with mitch.
+Firstly each contrast individually but also all at once.
+
+```{r,gt}
+
+m2h <- read.table("mouse2human.txt.sort")
+m2h[,1]=NULL
+```
+
+## Heart: ctrl vs acetate
+
+```{r,mitch1}
+rownames(heart_ctrl_vs_acetate) <- sapply(strsplit(rownames(heart_ctrl_vs_acetate),"_"),"[[",1)
+m <- mitch_import(x=heart_ctrl_vs_acetate, DEtype="deseq2",geneTable=m2h)
+
+capture.output(
+    res <- mitch_calc(m,genesets=genesets,priority="effect")
+    , file = "/dev/null", append = FALSE,
+    type = c("output", "message"), split = FALSE)
+
+head(res$enrichment_result,20)
+
+unlink("heart_ctrl_vs_acetate.html")
+    capture.output(
+        mitch_report(res,outfile=paste("heart_ctrl_vs_acetate.html"))
+        , file = "/dev/null", append = FALSE,
+        type = c("output", "message"), split = FALSE)
+
+```
+
+## Heart: ctrl vs high fibre
+
+```{r,mitch2}
+rownames(heart_ctrl_vs_hifibre) <- sapply(strsplit(rownames(heart_ctrl_vs_hifibre),"_"),"[[",1)
+m <- mitch_import(x=heart_ctrl_vs_hifibre, DEtype="deseq2",geneTable=m2h)
+
+capture.output(
+    res <- mitch_calc(m,genesets=genesets,priority="effect")
+    , file = "/dev/null", append = FALSE,
+    type = c("output", "message"), split = FALSE)
+
+head(res$enrichment_result,20)
+
+unlink("heart_ctrl_vs_hifibre.html")
+    capture.output(
+        mitch_report(res,outfile=paste("heart_ctrl_vs_hifibre.html"))
+        , file = "/dev/null", append = FALSE,
+        type = c("output", "message"), split = FALSE)
+
+```
+
+## Spleen: ctrl vs acetate 
+
+```{r,mitch3}
+rownames(spleen_ctrl_vs_acetate) <- sapply(strsplit(rownames(spleen_ctrl_vs_acetate),"_"),"[[",1)
+m <- mitch_import(x=spleen_ctrl_vs_acetate, DEtype="deseq2",geneTable=m2h)
+
+capture.output(
+    res <- mitch_calc(m,genesets=genesets,priority="effect")
+    , file = "/dev/null", append = FALSE,
+    type = c("output", "message"), split = FALSE)
+
+head(res$enrichment_result,20)
+
+unlink("spleen_ctrl_vs_acetate.html")
+    capture.output(
+        mitch_report(res,outfile=paste("spleen_ctrl_vs_acetate.html"))
+        , file = "/dev/null", append = FALSE,
+        type = c("output", "message"), split = FALSE)
+
+```
+
+## Spleen: ctrl vs high fibre
+
+```{r,mitch4}
+rownames(spleen_ctrl_vs_hifibre) <- sapply(strsplit(rownames(spleen_ctrl_vs_hifibre),"_"),"[[",1)
+m <- mitch_import(x=spleen_ctrl_vs_hifibre, DEtype="deseq2",geneTable=m2h)
+
+capture.output(
+    res <- mitch_calc(m,genesets=genesets,priority="effect")
+    , file = "/dev/null", append = FALSE,
+    type = c("output", "message"), split = FALSE)
+
+head(res$enrichment_result,20)
+
+unlink("spleen_ctrl_vs_hifibre.html")
+    capture.output(
+        mitch_report(res,outfile=paste("spleen_ctrl_vs_hifibre.html"))
+        , file = "/dev/null", append = FALSE,
+        type = c("output", "message"), split = FALSE)
+
+```
+
+## Multi enrichment
+
+```{r,multi}
+x <- list("heart_ctrl_vs_acetate"=heart_ctrl_vs_acetate,
+    "heart_ctrl_vs_hifibre"=heart_ctrl_vs_hifibre,
+    "spleen_ctrl_vs_acetate"=spleen_ctrl_vs_acetate,
+    "spleen_ctrl_vs_hifibre"=spleen_ctrl_vs_hifibre)
+
+m <- mitch_import(x=x, DEtype="deseq2",geneTable=m2h)
+
+capture.output(
+    res <- mitch_calc(m,genesets=genesets,priority="effect")
+    , file = "/dev/null", append = FALSE,
+    type = c("output", "message"), split = FALSE)
+
+head(res$enrichment_result,20)
+
+unlink("multi_enrichment.html")
+    capture.output(
+        mitch_report(res,outfile=paste("multi_enrichment.html"))
+        , file = "/dev/null", append = FALSE,
+        type = c("output", "message"), split = FALSE)
+```
+
+End of report
+
+# Session information
+
+```{r,session}
+sessionInfo()
+```
