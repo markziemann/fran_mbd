@@ -8,6 +8,7 @@ output:
 theme: cosmo
 ---
 
+Source: https://github.com/markziemann/fran_mbd/blob/master/main_report_meth.Rmd
 
 ## Introduction
 
