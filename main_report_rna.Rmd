@@ -1,5 +1,5 @@
 ---
-title: "MBD-seq analysis: effect of acetate and fibre on heart and spleen DNA methylation"
+title: "RNA-seq analysis: effect of acetate and fibre on heart and spleen DNA methylation"
 author: "Mark Ziemann"
 date: "`r Sys.Date()`"
 output:
@@ -12,12 +12,16 @@ Source: https://github.com/markziemann/fran_mbd/blob/master/main_report_meth.Rmd
 
 ## Introduction
 
-In this report, I will take you through an analysis of the MBD-seq that was previosly generated.
-I will perform an analysis that begins with DESeq2 for differential methylation followed by pathway enrichment analysis with mitch.
+In this report, I will take you through an analysis of the RNA-seq that was previosly generated.
+I will perform an analysis that begins with DESeq2 for differential expression followed by pathway enrichment analysis with mitch.
 
 ```{r,packages}
 suppressPackageStartupMessages({
     # to be run in R4
+    library("plyr")
+    library("statmod")
+    library("locfit")
+    library("parallel")
     library("tidyverse")
     library("reshape2")
     library("DESeq2")
@@ -29,12 +33,28 @@ suppressPackageStartupMessages({
 
 ## Import profiling data 
 
-This analysis uses the 3kbp area arount the TSS.
+Kallisto was used to map the reads to the transcriptome.
+Here I'm importing the transcript level counts and aggregating to gene level.
 
 ```{r,import}
-hm <- read.table("heart_meth_3kbpTSS.txt",header=TRUE,row.names=1)
-sm <-read.table("spleen_meth_3kbpTSS.txt",header=TRUE,row.names=1)
-b <- data.frame(sm,hm)
+tmp<-read.table("3col.tsv",header=F)
+x<-as.matrix(acast(tmp, V2~V1, value.var="V3"))
+g<-read.table("tx2gn.tsv",header=F,row.names=1)
+x<-merge(g,x,by=0)
+rownames(x)=x$Row.names
+x$Row.names=NULL
+# aggregate to gene names
+x<-aggregate(. ~ V2,x,sum)
+rownames(x)=x$V2
+x$V2=NULL
+x$t=NULL
+x <- round(x)
+
+# separate heart and spleen data
+hr <- x[,grep("H_",colnames(x) )]
+sr <- x[,grep("S_",colnames(x) )]
+b <- data.frame(sr,hr)
+
 ```
 
 # MDS plots
@@ -44,32 +64,26 @@ plot(cmdscale(dist(t(b))), bty='l', xlab="Coordinate 1", ylab="Coordinate 2",
 text(cmdscale(dist(t(b))), labels=colnames(b),cex=1.3) 
 mtext("spleen and heart samples")
 
-plot(cmdscale(dist(t(hm))), bty='l', xlab="Coordinate 1", ylab="Coordinate 2",
+plot(cmdscale(dist(t(hr))), bty='l', xlab="Coordinate 1", ylab="Coordinate 2",
  type = "p", pch=19, cex.axis=1.3, cex.lab=1.3 , col="gray")
-text(cmdscale(dist(t(hm))), labels=colnames(hm),cex=1.3)
+text(cmdscale(dist(t(hr))), labels=colnames(hr),cex=1.3)
 mtext("heart samples")
 
-plot(cmdscale(dist(t(sm))), bty='l', xlab="Coordinate 1", ylab="Coordinate 2",
+plot(cmdscale(dist(t(sr))), bty='l', xlab="Coordinate 1", ylab="Coordinate 2",
  type = "p", pch=19, cex.axis=1.3, cex.lab=1.3 , col="gray")
-text(cmdscale(dist(t(sm))), labels=colnames(sm),cex=1.3)
+text(cmdscale(dist(t(sr))), labels=colnames(sr),cex=1.3)
 mtext("spleen samples")
 ```
 
 # Curate the samplesheet
 ```{r,samplesheet}
-ss_sm <- as.data.frame(colnames(sm))
-colnames(ss_sm) <- "samplename"
-ss_sm$group  <- sapply(strsplit(as.character(ss_sm$samplename) , "_"),"[[",2)
-ss_sm$group <- gsub("[0-9]+","",ss_sm$group)
-rownames(ss_sm) <- ss_sm$samplename
-ss_sm$samplename=NULL
-
-ss_hm <- as.data.frame(colnames(hm))
-colnames(ss_hm) <- "samplename"
-ss_hm$group  <- sapply(strsplit(as.character(ss_hm$samplename) , "_"),"[[",2)
-ss_hm$group <- gsub("[0-9]+","",ss_hm$group)
-rownames(ss_hm) <- ss_hm$samplename
-ss_hm$samplename=NULL
+ctrl<-as.factor(as.numeric(grepl("ctrl",colnames(x))))
+hifib<-as.factor(as.numeric(grepl("hifibre",colnames(x))))
+acetate<-as.factor(as.numeric(grepl("acetate",colnames(x))))
+heart<-as.factor(as.numeric(grepl("H",colnames(x))))
+spleen<-as.factor(as.numeric(grepl("S",colnames(x))))
+ss<-cbind(heart,spleen,ctrl,hifib,acetate)-1
+row.names(ss)=colnames(x)
 ```
 
 # Differential analysis
@@ -87,11 +101,12 @@ We will be running some comparisons between groups:
 
 ## HEART ctrl vs acetate
 
-```{r,dm1}
-x <- hm[,grep("hifi" , colnames(hm) ,invert=TRUE)]
+```{r,de1}
+ss_hr <- ss[grep("H_",rownames(ss)),]
+x <- hr[,grep("hifi" , colnames(hr) ,invert=TRUE)]
 x<-x[which(rowSums(x)/ncol(x)>=(10)),]
-xs <- ss_hm[which( rownames(ss_hm) %in% colnames(x) ),1,drop=FALSE]
-xs$trt <- factor(as.numeric(grepl("acetate",xs$group)))
+xs <- data.frame(ss_hr[which( rownames(ss_hr) %in% colnames(x) ),1,drop=FALSE])
+xs$trt <- factor(as.numeric(grepl("acet",rownames(xs))))
 dds <- DESeqDataSetFromMatrix(countData = x , colData = xs, design = ~ trt )
 res <- DESeq(dds)
 z<- results(res)
@@ -99,7 +114,7 @@ vsd <- vst(dds, blind=FALSE)
 zz<-cbind(as.data.frame(z),assay(vsd))
 dge<-as.data.frame(zz[order(zz$pvalue),])
 head(dge)
-write.table(dge,file="heart_ctrl_vs_acetate_meth.tsv",quote=F,sep="\t")
+write.table(dge,file="heart_ctrl_vs_acetate_rna.tsv",quote=F,sep="\t")
 #some plots
 sig<-subset(dge,padj<0.05)
 SIG=nrow(sig)
@@ -126,11 +141,11 @@ heart_ctrl_vs_acetate <- dge
 
 ## HEART ctrl vs hifib
 
-```{r,dm2}
-x <- hm[,grep("acet" , colnames(hm) ,invert=TRUE)]
+```{r,de2}
+x <- hr[,grep("acet" , colnames(hr) ,invert=TRUE)]
 x<-x[which(rowSums(x)/ncol(x)>=(10)),]
-xs <- ss_hm[which( rownames(ss_hm) %in% colnames(x) ),1,drop=FALSE]
-xs$trt <- factor(as.numeric(grepl("hifi",xs$group)))
+xs <- data.frame(ss_hr[which( rownames(ss_hr) %in% colnames(x) ),1,drop=FALSE])
+xs$trt <- factor(as.numeric(grepl("hifi",rownames(xs))))
 dds <- DESeqDataSetFromMatrix(countData = x , colData = xs, design = ~ trt )
 res <- DESeq(dds)
 z<- results(res)
@@ -138,7 +153,7 @@ vsd <- vst(dds, blind=FALSE)
 zz<-cbind(as.data.frame(z),assay(vsd))
 dge<-as.data.frame(zz[order(zz$pvalue),])
 head(dge)
-write.table(dge,file="heart_ctrl_vs_hifibre_meth.tsv",quote=F,sep="\t")
+write.table(dge,file="heart_ctrl_vs_hifibre_rna.tsv",quote=F,sep="\t")
 #some plots
 sig<-subset(dge,padj<0.05)
 SIG=nrow(sig)
@@ -165,11 +180,13 @@ heart_ctrl_vs_hifibre <- dge
 
 ## SPLEEN ctrl vs acetate
 
-```{r,dm3}
-x <- sm[,grep("hifi" , colnames(sm) ,invert=TRUE)]
+```{r,de3}
+ss_sr <- ss[grep("S_",rownames(ss)),]
+x <- sr[,grep("hifi" , colnames(sr) ,invert=TRUE)]
 x<-x[which(rowSums(x)/ncol(x)>=(10)),]
-xs <- ss_sm[which( rownames(ss_sm) %in% colnames(x) ),1,drop=FALSE]
-xs$trt <- factor(as.numeric(grepl("acetate",xs$group)))
+xs <- data.frame(ss_sr[which( rownames(ss_sr) %in% colnames(x) ),1,drop=FALSE])
+xs$trt <- factor(as.numeric(grepl("acet",rownames(xs))))
+
 dds <- DESeqDataSetFromMatrix(countData = x , colData = xs, design = ~ trt )
 res <- DESeq(dds)
 z<- results(res)
@@ -177,7 +194,7 @@ vsd <- vst(dds, blind=FALSE)
 zz<-cbind(as.data.frame(z),assay(vsd))
 dge<-as.data.frame(zz[order(zz$pvalue),])
 head(dge)
-write.table(dge,file="spleen_ctrl_vs_acetate_meth.tsv",quote=F,sep="\t")
+write.table(dge,file="spleen_ctrl_vs_acetate_rna.tsv",quote=F,sep="\t")
 #some plots
 sig<-subset(dge,padj<0.05)
 SIG=nrow(sig)
@@ -205,11 +222,11 @@ spleen_ctrl_vs_acetate <- dge
 
 ## SPLEEN ctrl vs hifibre
 
-```{r,dm4}
-x <- sm[,grep("acet" , colnames(sm) ,invert=TRUE)]
+```{r,de4}
+x <- sr[,grep("acet" , colnames(sr) ,invert=TRUE)]
 x<-x[which(rowSums(x)/ncol(x)>=(10)),]
-xs <- ss_sm[which( rownames(ss_sm) %in% colnames(x) ),1,drop=FALSE]
-xs$trt <- factor(as.numeric(grepl("hifi",xs$group)))
+xs <- data.frame(ss_sr[which( rownames(ss_sr) %in% colnames(x) ),1,drop=FALSE])
+xs$trt <- factor(as.numeric(grepl("hifi",rownames(xs))))
 dds <- DESeqDataSetFromMatrix(countData = x , colData = xs, design = ~ trt )
 res <- DESeq(dds)
 z<- results(res)
@@ -217,7 +234,7 @@ vsd <- vst(dds, blind=FALSE)
 zz<-cbind(as.data.frame(z),assay(vsd))
 dge<-as.data.frame(zz[order(zz$pvalue),])
 head(dge)
-write.table(dge,file="spleen_ctrl_vs_hifibre_meth.tsv",quote=F,sep="\t")
+write.table(dge,file="spleen_ctrl_vs_hifibre_rna.tsv",quote=F,sep="\t")
 #some plots
 sig<-subset(dge,padj<0.05)
 SIG=nrow(sig)
@@ -247,7 +264,6 @@ spleen_ctrl_vs_hifibre <- dge
 ## First fetch gene sets from Reactome.
 
 ```{r,genesets}
-library("mitch")
 # gene sets
 download.file("https://reactome.org/download/current/ReactomePathways.gmt.zip", 
     destfile="ReactomePathways.gmt.zip")
@@ -277,9 +293,9 @@ capture.output(
 
 head(res$enrichment_result,20)
 
-unlink("heart_ctrl_vs_acetate_meth.html")
+unlink("heart_ctrl_vs_acetate_rna.html")
     capture.output(
-        mitch_report(res,outfile=paste("heart_ctrl_vs_acetate_meth.html"))
+        mitch_report(res,outfile=paste("heart_ctrl_vs_acetate_rna.html"))
         , file = "/dev/null", append = FALSE,
         type = c("output", "message"), split = FALSE)
 
@@ -298,9 +314,9 @@ capture.output(
 
 head(res$enrichment_result,20)
 
-unlink("heart_ctrl_vs_hifibre_meth.html")
+unlink("heart_ctrl_vs_hifibre_rna.html")
     capture.output(
-        mitch_report(res,outfile=paste("heart_ctrl_vs_hifibre_meth.html"))
+        mitch_report(res,outfile=paste("heart_ctrl_vs_hifibre_rna.html"))
         , file = "/dev/null", append = FALSE,
         type = c("output", "message"), split = FALSE)
 
@@ -319,9 +335,9 @@ capture.output(
 
 head(res$enrichment_result,20)
 
-unlink("spleen_ctrl_vs_acetate_meth.html")
+unlink("spleen_ctrl_vs_acetate_rna.html")
     capture.output(
-        mitch_report(res,outfile=paste("spleen_ctrl_vs_acetate_meth.html"))
+        mitch_report(res,outfile=paste("spleen_ctrl_vs_acetate_rna.html"))
         , file = "/dev/null", append = FALSE,
         type = c("output", "message"), split = FALSE)
 
@@ -340,9 +356,9 @@ capture.output(
 
 head(res$enrichment_result,20)
 
-unlink("spleen_ctrl_vs_hifibre_meth.html")
+unlink("spleen_ctrl_vs_hifibre_rna.html")
     capture.output(
-        mitch_report(res,outfile=paste("spleen_ctrl_vs_hifibre_meth.html"))
+        mitch_report(res,outfile=paste("spleen_ctrl_vs_hifibre_rna.html"))
         , file = "/dev/null", append = FALSE,
         type = c("output", "message"), split = FALSE)
 
@@ -365,9 +381,9 @@ capture.output(
 
 head(res$enrichment_result,20)
 
-unlink("multi_enrichment_meth.html")
+unlink("multi_enrichment_rna.html")
     capture.output(
-        mitch_report(res,outfile=paste("multi_enrichment_meth.html"))
+        mitch_report(res,outfile=paste("multi_enrichment_rna.html"))
         , file = "/dev/null", append = FALSE,
         type = c("output", "message"), split = FALSE)
 ```
