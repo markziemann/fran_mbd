@@ -1,0 +1,158 @@
+---
+title: "Integrated RNA and DNA methylation analysis: effect of acetate and fibre on heart and spleen DNA methylation"
+author: "Mark Ziemann"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+theme: cosmo
+---
+
+Source: https://github.com/markziemann/fran_mbd/blob/master/main_report_integration.Rmd
+
+## Introduction
+
+I will perform a multi-contrast pathway analysis involving RNA expression and DNA methylation data looking
+at differences caused by acetate and high fibre diet.
+
+```{r,packages}
+suppressPackageStartupMessages({
+    # to be run in R4
+    library("mitch")
+})
+```
+
+## Import profiling data 
+
+Importing the DESeq2 tables I generated earlier.
+
+```{r,import}
+rna_heart_ctrl_vs_acetate <- read.table("heart_ctrl_vs_acetate_rna.tsv")
+rna_heart_ctrl_vs_hifibre <- read.table("heart_ctrl_vs_hifibre_rna.tsv")
+rna_spleen_ctrl_vs_acetate <- read.table("spleen_ctrl_vs_acetate_rna.tsv")
+rna_spleen_ctrl_vs_hifibre <- read.table("spleen_ctrl_vs_hifibre_rna.tsv")
+
+meth_heart_ctrl_vs_acetate <- read.table("heart_ctrl_vs_acetate_meth.tsv")
+meth_heart_ctrl_vs_hifibre <- read.table("heart_ctrl_vs_hifibre_meth.tsv")
+meth_spleen_ctrl_vs_acetate <- read.table("spleen_ctrl_vs_acetate_meth.tsv")
+meth_spleen_ctrl_vs_hifibre <- read.table("spleen_ctrl_vs_hifibre_meth.tsv")
+
+# strip the gene names out to make downstream analysis easier
+rownames(rna_heart_ctrl_vs_acetate) <- sapply(strsplit(rownames(rna_heart_ctrl_vs_acetate),"_"),"[[",1)
+rownames(rna_heart_ctrl_vs_hifibre) <- sapply(strsplit(rownames(rna_heart_ctrl_vs_hifibre),"_"),"[[",1)
+rownames(rna_spleen_ctrl_vs_acetate) <- sapply(strsplit(rownames(rna_spleen_ctrl_vs_acetate),"_"),"[[",1)
+rownames(rna_spleen_ctrl_vs_hifibre) <- sapply(strsplit(rownames(rna_spleen_ctrl_vs_hifibre),"_"),"[[",1)
+
+rownames(meth_heart_ctrl_vs_acetate) <- sapply(strsplit(rownames(meth_heart_ctrl_vs_acetate),"_"),"[[",1)
+rownames(meth_heart_ctrl_vs_hifibre) <- sapply(strsplit(rownames(meth_heart_ctrl_vs_hifibre),"_"),"[[",1)
+rownames(meth_spleen_ctrl_vs_acetate) <- sapply(strsplit(rownames(meth_spleen_ctrl_vs_acetate),"_"),"[[",1)
+rownames(meth_spleen_ctrl_vs_hifibre) <- sapply(strsplit(rownames(meth_spleen_ctrl_vs_hifibre),"_"),"[[",1)
+```
+
+## Pathway level analysis with mitch
+
+## First fetch gene sets from Reactome.
+
+```{r,genesets}
+# gene sets
+download.file("https://reactome.org/download/current/ReactomePathways.gmt.zip", 
+    destfile="ReactomePathways.gmt.zip")
+unzip("ReactomePathways.gmt.zip",overwrite = TRUE)
+genesets <- gmt_import("ReactomePathways.gmt")
+
+# gene table
+m2h <- read.table("mouse2human.txt.sort")
+m2h[,1]=NULL
+```
+
+## Heart: ctrl vs acetate
+
+```{r,mitch1}
+x <- list("rna"=rna_heart_ctrl_vs_acetate,"meth"=meth_heart_ctrl_vs_acetate)
+m <- mitch_import(x=x, DEtype="deseq2",geneTable=m2h)
+
+capture.output(
+    res <- mitch_calc(m,genesets=genesets,priority="effect")
+    , file = "/dev/null", append = FALSE,
+    type = c("output", "message"), split = FALSE)
+
+head(res$enrichment_result,20)
+
+unlink("heart_ctrl_vs_acetate_integrate.html")
+    capture.output(
+        mitch_report(res,outfile=paste("heart_ctrl_vs_acetate_integrate.html"))
+        , file = "/dev/null", append = FALSE,
+        type = c("output", "message"), split = FALSE)
+
+```
+
+## Heart: ctrl vs high fibre
+
+```{r,mitch2}
+x <- list("rna"=rna_heart_ctrl_vs_hifibre,"meth"=meth_heart_ctrl_vs_hifibre)
+m <- mitch_import(x=x, DEtype="deseq2",geneTable=m2h)
+
+capture.output(
+    res <- mitch_calc(m,genesets=genesets,priority="effect")
+    , file = "/dev/null", append = FALSE,
+    type = c("output", "message"), split = FALSE)
+
+head(res$enrichment_result,20)
+
+unlink("heart_ctrl_vs_hifibre_integrate.html")
+    capture.output(
+        mitch_report(res,outfile=paste("heart_ctrl_vs_hifibre_integrate.html"))
+        , file = "/dev/null", append = FALSE,
+        type = c("output", "message"), split = FALSE)
+
+```
+
+## Spleen: ctrl vs acetate 
+
+```{r,mitch3}
+x <- list("rna"=rna_spleen_ctrl_vs_acetate,"meth"=meth_spleen_ctrl_vs_acetate)
+m <- mitch_import(x=x, DEtype="deseq2",geneTable=m2h)
+
+capture.output(
+    res <- mitch_calc(m,genesets=genesets,priority="effect")
+    , file = "/dev/null", append = FALSE,
+    type = c("output", "message"), split = FALSE)
+
+head(res$enrichment_result,20)
+
+unlink("spleen_ctrl_vs_acetate_integrate.html")
+    capture.output(
+        mitch_report(res,outfile=paste("spleen_ctrl_vs_acetate_integrate.html"))
+        , file = "/dev/null", append = FALSE,
+        type = c("output", "message"), split = FALSE)
+
+```
+
+## Spleen: ctrl vs high fibre
+
+```{r,mitch4}
+x <- list("rna"=rna_spleen_ctrl_vs_hifibre,"meth"=meth_spleen_ctrl_vs_hifibre)
+m <- mitch_import(x=x, DEtype="deseq2",geneTable=m2h)
+
+capture.output(
+    res <- mitch_calc(m,genesets=genesets,priority="effect")
+    , file = "/dev/null", append = FALSE,
+    type = c("output", "message"), split = FALSE)
+
+head(res$enrichment_result,20)
+
+unlink("spleen_ctrl_vs_hifibre_integrate.html")
+    capture.output(
+        mitch_report(res,outfile=paste("spleen_ctrl_vs_hifibre_integrate.html"))
+        , file = "/dev/null", append = FALSE,
+        type = c("output", "message"), split = FALSE)
+
+```
+
+End of report
+
+# Session information
+
+```{r,session}
+sessionInfo()
+```
